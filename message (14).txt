@@ -1,0 +1,248 @@
+library IEEE;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_unsigned.all;
+use ieee.numeric_std.all;
+ 
+entity vga_driver is
+   port(
+        CLK,RST: in std_logic; 
+        RGB_in:in std_Logic_vector(11 downto 0);
+        IMG:in std_logic_vector(1 downto 0);
+        Right:in std_logic;
+        Left:in std_logic;
+        Up:in std_logic;
+        Down:in std_logic;
+     	HSync, VSync: out std_logic;
+     	RGB_out: out std_logic_vector (11 downto 0 )
+		--11->8:rosu(3 downo 0)
+		--7->4:verde(3 downto 0)
+		--3->0:albastru(3 downto 0)
+		--fiecare din cele 12 pozitii se conecteaza la pinii corespunzatori conform pozei de la link-ul
+		--https://reference.digilentinc.com/basys3/refmanual
+		--la sectiunea " VGA PORT"
+    );
+end vga_driver;
+architecture comportamentala of vga_driver is 
+
+
+signal CLK_25 : std_logic := '0';
+signal CLK_move :std_logic :='0';
+ 
+constant HD : integer := 639 ; --Horizontal Display(640)
+constant HFP : integer := 16; --Horizontal Front Porch (Right border)
+constant HSP : integer := 96; --Sync Pulse (Retrace)
+constant HBP: integer := 48; --Horizontal Back Porch (Left border) 
+ 
+constant VD: integer := 479; --Vertical Display (480)
+constant VFP: integer := 10; --Vertical Front Porch (Right border)
+constant VSP: integer := 2;	--Sync Pulse (Retrace)
+constant VBP: integer := 33; --Vertical Back Porch (Left border)
+ 
+signal Pixel_x : std_logic_vector(9 downto 0):= (others => '0');
+signal Pixel_y : std_logic_vector(9 downto 0):= (others => '0');
+ 
+signal poz_x : std_logic_vector(9 downto 0) :="0000000000";
+signal poz_y : std_logic_vector(9 downto 0) :="0000000000";
+signal videoOn: std_logic := '0';		
+ 
+ 
+begin 
+--divizorul de frecventa 100 MHz --> 25 MHz
+CLK_div: process(CLK)--TADEUȘ
+variable clk_prov:std_logic;
+variable tick:std_logic_vector(1 downto 0):="00";
+begin
+	clk_prov:=clk_25;
+	if clk='1' and clk'event then
+		tick:=tick+1;
+		if tick="10" then
+			clk_prov:=not clk_prov;
+			tick:=(others=>'0');
+		end if;	
+	end if;
+	clk_25<=clk_prov;
+end process;
+ 
+Pixel_X_counter: process(CLK_25,RST)
+begin
+	if(RST = '1') then 
+		Pixel_x <= (others=> '0');	
+	elsif(CLK_25'event and CLK_25='1') then
+	 	if (Pixel_x = (HD + HFP + HSP + HBP) )then 
+			Pixel_x <= (others=> '0'); 
+		else
+	 	 	Pixel_x <= Pixel_x +1;
+   		end if;
+  end if;
+end process;
+
+Pixel_y_counter: process(CLK_25,RST,Pixel_x)
+begin
+	if(RST = '1') then 
+		Pixel_y <= (others=> '0');	
+	elsif(CLK_25'event and CLK_25='1') then
+	 	if (Pixel_x = (HD + HFP + HSP + HBP) )then 
+	 		if (Pixel_y = (VD + VFP + VSP + VBP) )then 
+				Pixel_y <= (others=> '0');
+			else 
+	  			Pixel_y <= Pixel_y +1;
+			end if;
+	   end if;
+	end if;
+end process;
+ 
+Horizontal_synchronisation : process (CLK_25,RST,Pixel_x)
+begin 
+	if(RST = '1') then 
+		HSync  <= '0';	
+	elsif(CLK_25'event and CLK_25='1') then
+		if(Pixel_x <= HSP ) then
+			HSync <= '0';
+		else 
+			HSync <= '1';
+	end if;
+   end if;
+ end process;
+ 
+Vertical_synchronisation : process (CLK_25,RST,Pixel_y)
+begin 
+	if(RST = '1') then 
+		VSync  <= '0';	
+	elsif(CLK_25'event and CLK_25='1') then
+		if(Pixel_y < VSP )then
+			VSync <= '0';
+		else 
+			VSync <= '1';
+	end if;
+   end if;
+ end process;
+ 
+Video_on: process (CLK_25,RST,Pixel_x,Pixel_y )	
+	begin 
+	if(RST = '1') then 
+		videoOn  <= '0';	
+	elsif(CLK_25'event and CLK_25='1') then
+		if(Pixel_x >= HSP + HBP) and(Pixel_x <= HD+ HSP + HBP) 
+			and(Pixel_y >=VSP + VBP)and (Pixel_y <= VD +VSP + VBP)then 
+			videoOn <= '1';
+		else 
+			videoOn <= '0';
+	end if;
+   end if;
+ end process;		
+
+CLK_div2: process(CLK)
+variable clk_prov:std_logic;
+variable tick:std_logic_vector(17 downto 0):="000000000000000000";
+begin
+	clk_prov:=clk_move;
+	if clk='1' and clk'event then
+		tick:=tick+1;
+		if tick="100000000000000000" then
+			clk_prov:=not clk_prov;
+			tick:=(others=>'0');
+		end if;	
+	end if;
+	clk_move<=clk_prov;
+end process;
+
+
+Move_image: process (CLK_move, RST,Pixel_x, Pixel_y, videoOn)
+variable x:std_logic_vector (9 downto 0);
+variable y:std_logic_vector (9 downto 0);
+begin
+   x:=poz_x;
+   y:=poz_y;
+   if(CLK_move'event and CLK_move='1')then
+       if (Right = '1') then
+          x:=x+1;
+       end if;
+       if (Left = '1') then
+          x:=x-1;
+       end if;
+       if (Up = '1') then
+          y:=y-1;
+       end if;
+       if (Down = '1') then
+          y:=y+1;
+       end if;
+   end if;
+   poz_x<=x;
+   poz_y<=y;
+end process;	
+   
+First_image: process (CLK_25, RST,Pixel_x, Pixel_y, videoOn)
+variable x:integer;
+variable y:integer;
+variable x1:integer;
+variable y1:integer;
+variable x2:integer;
+variable y2:integer;
+variable RGB:std_logic_vector(11 downto 0);
+begin
+--patrat
+  if(RST = '1') then 
+	RGB  := "000000000000";	
+  elsif(CLK_25'event and CLK_25='1') then
+    if(IMG="00") then
+		 if(videoOn = '1')then 
+			if((Pixel_x >= ("0100001110"+poz_x) and Pixel_x <= ("0101000000"+poz_x)) and (Pixel_y >= ("0010111110"+poz_y) and Pixel_y <= ("0011110000"+poz_y)))then
+				RGB := RGB_in;
+			else
+				RGB :="000000000000";
+			end if;
+		 else 
+			RGB  := "000000000000";
+ 
+	     end if;   
+--checkers  
+    elsif(IMG="01") then
+      if(videoOn = '1')then --facem fiecare patratel de sah de 50 pe 50  	 
+		 x:=to_integer(signed(Pixel_x));
+		 y:=to_integer(signed(Pixel_y));
+		 x1:=to_integer(signed(poz_x));
+		 y1:=to_integer(signed(poz_y));
+         if((((x+x1) mod 100 < 50) and ((y+y1) mod 100 < 50)) or (((x+x1) mod 100 >= 50) and ((y+y1) mod 100>= 50))) then
+              RGB := RGB_in;
+         else
+              RGB := "000000000000";
+         end if;
+      else 
+         RGB  := "000000000000";   
+      end if; 
+      
+--cerc
+	elsif(IMG="10") then
+      if(videoOn = '1')then 	 
+		 x:=to_integer(signed(Pixel_x));
+		 y:=to_integer(signed(Pixel_y));
+		 x1:=to_integer(signed(poz_x));
+		 y1:=to_integer(signed(poz_y));
+         if((x-320-x1)**2+(y-240-y1)**2<=2200) then
+              RGB := RGB_in;
+         else
+              RGB := "000000000000";
+         end if;
+      else 
+         RGB  := "000000000000";   
+      end if;
+--trapez
+     elsif(IMG="11") then
+      if(videoOn = '1')then   	 
+		 x:=to_integer(signed(Pixel_x));
+		 y:=to_integer(signed(Pixel_y));
+		 x1:=to_integer(signed(poz_x));
+		 y1:=to_integer(signed(poz_y));
+         if((Pixel_x >= ("0100110010"+poz_x-(Pixel_y+30-"0010111110"-poz_y)) and Pixel_x <= ("0101000000"+poz_x+(Pixel_y+30-"0010111110"-poz_y))) and (Pixel_y >= ("0010111110"+poz_y) and Pixel_y <= ("0011110000"+poz_y)))then
+              RGB := RGB_in;
+         else
+              RGB := "000000000000";
+         end if;
+      else 
+         RGB  := "000000000000";   
+      end if;		
+     end if; 
+  end if;  
+  RGB_out<=RGB;
+end process;
+end architecture;
